@@ -1,0 +1,405 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Recomendador de libros – De Cea Libros</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;600&family=DM+Sans:wght@400;500&display=swap');
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #faf8f4;
+    --card: #ffffff;
+    --text: #1a1a18;
+    --muted: #6b6b62;
+    --accent: #2d5016;
+    --accent-light: #e8f0df;
+    --accent-mid: #4a7c28;
+    --border: #e2ddd4;
+    --tag-bg: #f0ebe2;
+    --tag-sel: #2d5016;
+    --tag-sel-text: #ffffff;
+    --btn: #2d5016;
+    --btn-text: #ffffff;
+    --btn-hover: #1e3a0e;
+    --shadow: 0 2px 16px rgba(0,0,0,0.08);
+  }
+
+  body {
+    font-family: 'DM Sans', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 2rem 1rem;
+  }
+
+  .widget { width: 100%; max-width: 580px; }
+
+  .header { text-align: center; margin-bottom: 2rem; }
+  .header .logo-line { font-size: 11px; letter-spacing: 0.15em; text-transform: uppercase; color: var(--muted); margin-bottom: 0.5rem; }
+  .header h1 { font-family: 'Playfair Display', serif; font-size: 28px; font-weight: 600; color: var(--text); margin-bottom: 0.4rem; }
+  .header p { font-size: 14px; color: var(--muted); }
+
+  .progress-bar { display: flex; gap: 6px; margin-bottom: 2rem; }
+  .progress-bar span { flex: 1; height: 3px; background: #e2ddd4; border-radius: 2px; transition: background 0.4s; }
+  .progress-bar span.done { background: var(--accent); }
+  .progress-bar span.active { background: var(--accent-mid); }
+
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 16px; padding: 2rem; box-shadow: var(--shadow); }
+
+  .step { display: none; }
+  .step.active { display: block; }
+
+  .step-label { font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); margin-bottom: 0.5rem; }
+  .step-question { font-family: 'Playfair Display', serif; font-size: 20px; font-weight: 600; line-height: 1.35; color: var(--text); margin-bottom: 1.5rem; }
+
+  .tags { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 1.5rem; }
+  .tag { padding: 8px 16px; border: 1.5px solid var(--border); border-radius: 100px; font-size: 14px; cursor: pointer; background: var(--tag-bg); color: var(--text); transition: all 0.18s; user-select: none; }
+  .tag:hover { border-color: var(--accent-mid); background: var(--accent-light); }
+  .tag.selected { background: var(--tag-sel); border-color: var(--tag-sel); color: var(--tag-sel-text); }
+
+  .input-field { width: 100%; padding: 12px 16px; border: 1.5px solid var(--border); border-radius: 10px; font-size: 15px; font-family: 'DM Sans', sans-serif; background: var(--bg); color: var(--text); outline: none; transition: border-color 0.2s; margin-bottom: 1.5rem; }
+  .input-field:focus { border-color: var(--accent); }
+
+  .btn { width: 100%; padding: 14px; background: var(--btn); color: var(--btn-text); border: none; border-radius: 10px; font-size: 15px; font-weight: 500; font-family: 'DM Sans', sans-serif; cursor: pointer; transition: background 0.18s, transform 0.1s; }
+  .btn:hover { background: var(--btn-hover); }
+  .btn:active { transform: scale(0.99); }
+  .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+  .btn-secondary { background: transparent; color: var(--accent); border: 1.5px solid var(--accent); margin-top: 10px; }
+  .btn-secondary:hover { background: var(--accent-light); }
+
+  .loading { text-align: center; padding: 2rem 0; }
+  .loading .spinner { width: 36px; height: 36px; border: 3px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.9s linear infinite; margin: 0 auto 1rem; }
+  .loading .loading-msg { font-size: 14px; color: var(--muted); transition: opacity 0.3s; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .results-intro { font-size: 14px; color: var(--muted); margin-bottom: 1.25rem; text-align: center; font-style: italic; }
+
+  /* Tarjeta de libro con imagen */
+  .book-card { display: flex; gap: 1rem; border: 1px solid var(--border); border-radius: 12px; padding: 1rem 1.1rem; margin-bottom: 10px; background: var(--bg); transition: border-color 0.18s; }
+  .book-card:hover { border-color: var(--accent-mid); }
+
+  .book-cover { flex-shrink: 0; width: 72px; }
+  .book-cover img { width: 72px; height: 100px; object-fit: cover; border-radius: 6px; display: block; background: var(--border); }
+  .book-cover .no-cover { width: 72px; height: 100px; border-radius: 6px; background: var(--accent-light); display: flex; align-items: center; justify-content: center; }
+  .book-cover .no-cover svg { width: 28px; height: 28px; opacity: 0.4; }
+
+  .book-info { flex: 1; min-width: 0; }
+  .book-info .num { font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); margin-bottom: 3px; }
+  .book-info h3 { font-family: 'Playfair Display', serif; font-size: 15px; font-weight: 600; color: var(--text); margin-bottom: 2px; line-height: 1.3; }
+  .book-info .author { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+  .book-info .why { font-size: 12px; color: var(--text); line-height: 1.5; margin-bottom: 8px; }
+
+  .book-footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+  .precio { font-size: 15px; font-weight: 500; color: var(--accent); }
+  .btn-ver { display: inline-block; font-size: 12px; font-weight: 500; padding: 6px 14px; background: var(--accent); color: white; border-radius: 8px; text-decoration: none; transition: background 0.18s; white-space: nowrap; }
+  .btn-ver:hover { background: var(--btn-hover); }
+
+  .sin-stock-badge { font-size: 11px; color: #a32d2d; background: #fff3f3; border: 1px solid #f5c1c1; border-radius: 6px; padding: 3px 8px; }
+
+  .error-msg { background: #fff3f3; border: 1px solid #f5c1c1; border-radius: 10px; padding: 1rem; font-size: 14px; color: #a32d2d; margin-bottom: 1rem; text-align: center; }
+
+  .notice { font-size: 12px; color: var(--muted); text-align: center; margin-bottom: 1rem; padding: 0.75rem; background: var(--accent-light); border-radius: 8px; }
+</style>
+</head>
+<body>
+<div class="widget">
+
+  <div class="header">
+    <div class="logo-line">De Cea Libros</div>
+    <h1>¿Qué libro eres hoy?</h1>
+    <p>Te ayudamos a encontrar tu próxima lectura.</p>
+  </div>
+
+  <div class="progress-bar" id="progressBar">
+    <span></span><span></span><span></span><span></span>
+  </div>
+
+  <div class="card">
+
+    <!-- Paso 1 -->
+    <div class="step active" id="step-1">
+      <div class="step-label">Paso 1 de 4</div>
+      <div class="step-question">¿Qué tipo de libro te llama la atención ahora?</div>
+      <div class="tags" id="tags-genero">
+        <div class="tag" data-val="Literatura chilena">Literatura chilena</div>
+        <div class="tag" data-val="Thriller y suspenso">Thriller y suspenso</div>
+        <div class="tag" data-val="Literatura juvenil">Juvenil</div>
+        <div class="tag" data-val="Ciencia ficción">Ciencia ficción</div>
+        <div class="tag" data-val="Romance">Romance</div>
+        <div class="tag" data-val="Historia y biografías">Historia y biografías</div>
+        <div class="tag" data-val="Autoayuda y desarrollo personal">Autoayuda</div>
+        <div class="tag" data-val="Novela literaria">Novela literaria</div>
+        <div class="tag" data-val="Terror y horror">Terror</div>
+        <div class="tag" data-val="Fantasía">Fantasía</div>
+        <div class="tag" data-val="No ficción">No ficción</div>
+      </div>
+      <button class="btn" id="btn1" disabled onclick="goNext(1)">Continuar</button>
+    </div>
+
+    <!-- Paso 2 -->
+    <div class="step" id="step-2">
+      <div class="step-label">Paso 2 de 4</div>
+      <div class="step-question">¿Cómo te sientes o qué buscas en esta lectura?</div>
+      <div class="tags" id="tags-mood">
+        <div class="tag" data-val="Entretenimiento y escapismo">Entretenerme</div>
+        <div class="tag" data-val="Aprender algo nuevo">Aprender algo</div>
+        <div class="tag" data-val="Emociones fuertes y adrenalina">Adrenalina</div>
+        <div class="tag" data-val="Reflexión y profundidad">Reflexionar</div>
+        <div class="tag" data-val="Relajación y lectura liviana">Relajarme</div>
+        <div class="tag" data-val="Inspiración y motivación">Inspirarme</div>
+        <div class="tag" data-val="Llorar o sentir mucho">Sentir mucho</div>
+        <div class="tag" data-val="Reírme">Reírme</div>
+      </div>
+      <button class="btn" id="btn2" disabled onclick="goNext(2)">Continuar</button>
+    </div>
+
+    <!-- Paso 3 -->
+    <div class="step" id="step-3">
+      <div class="step-label">Paso 3 de 4</div>
+      <div class="step-question">¿Cuál fue el último libro que leíste y te gustó?</div>
+      <input class="input-field" id="lastBook" type="text" placeholder="Ej: El alquimista, Gone Girl, Papelucho..." oninput="checkStep3()" />
+      <button class="btn" id="btn3" disabled onclick="goNext(3)">Continuar</button>
+    </div>
+
+    <!-- Paso 4 -->
+    <div class="step" id="step-4">
+      <div class="step-label">Paso 4 de 4</div>
+      <div class="step-question">¿Qué extensión prefieres?</div>
+      <div class="tags" id="tags-ext">
+        <div class="tag" data-val="libro corto (menos de 200 páginas)">Libro corto</div>
+        <div class="tag" data-val="libro de extensión media (200–400 páginas)">Extensión media</div>
+        <div class="tag" data-val="libro largo (más de 400 páginas)">Largo y épico</div>
+        <div class="tag" data-val="cualquier extensión">No me importa</div>
+      </div>
+      <button class="btn" id="btn4" disabled onclick="getRecommendations()">Buscar mis libros</button>
+    </div>
+
+    <!-- Loading -->
+    <div class="step" id="step-loading">
+      <div class="loading">
+        <div class="spinner"></div>
+        <p class="loading-msg" id="loadingMsg">Buscando los libros perfectos para ti...</p>
+      </div>
+    </div>
+
+    <!-- Resultados -->
+    <div class="step" id="step-results">
+      <div class="results-intro" id="resultsIntro"></div>
+      <div id="bookList"></div>
+      <button class="btn btn-secondary" onclick="restart()">Comenzar de nuevo</button>
+    </div>
+
+    <!-- Sin stock -->
+    <div class="step" id="step-nostock">
+      <div style="text-align:center; padding: 1.5rem 0;">
+        <p style="font-size:14px; color:var(--muted); margin-bottom:1.25rem;">No encontramos estos libros con stock disponible ahora mismo. ¡Prueba con otras preferencias!</p>
+        <button class="btn" onclick="restart()">Intentar de nuevo</button>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+// ─── CONFIGURACIÓN ──────────────────────────────────────────────────────────
+// Reemplaza esta URL con la URL de tu proxy en Railway una vez desplegado
+const PROXY_URL = "https://web-production-fec052.up.railway.app/libro";
+// ─────────────────────────────────────────────────────────────────────────────
+
+const state = { genero: null, mood: null, lastBook: '', extension: null };
+
+function updateProgress(step) {
+  document.querySelectorAll('#progressBar span').forEach((b, i) => {
+    b.className = '';
+    if (i < step - 1) b.classList.add('done');
+    else if (i === step - 1) b.classList.add('active');
+  });
+}
+
+function showStep(n) {
+  document.querySelectorAll('.step').forEach(s => s.classList.remove('active'));
+  const el = document.getElementById('step-' + n);
+  if (el) el.classList.add('active');
+  updateProgress(typeof n === 'number' && n <= 4 ? n : 4);
+}
+
+function setupTagGroup(containerId, stateKey, btnId) {
+  const container = document.getElementById(containerId);
+  const btn = document.getElementById(btnId);
+  container.querySelectorAll('.tag').forEach(tag => {
+    tag.addEventListener('click', () => {
+      container.querySelectorAll('.tag').forEach(t => t.classList.remove('selected'));
+      tag.classList.add('selected');
+      state[stateKey] = tag.dataset.val;
+      btn.disabled = false;
+    });
+  });
+}
+
+setupTagGroup('tags-genero', 'genero', 'btn1');
+setupTagGroup('tags-mood', 'mood', 'btn2');
+setupTagGroup('tags-ext', 'extension', 'btn4');
+
+function checkStep3() {
+  const val = document.getElementById('lastBook').value.trim();
+  state.lastBook = val;
+  document.getElementById('btn3').disabled = val.length < 2;
+}
+
+function goNext(from) { showStep(from + 1); }
+
+// ─── PASO 1: Pedir recomendaciones + verificar stock (todo vía proxy) ─────────
+async function getRecommendations() {
+  showStep('loading');
+  setLoadingMsg("Consultando con nuestra IA...");
+
+  try {
+    const params = new URLSearchParams({
+      genero:    state.genero,
+      mood:      state.mood,
+      lastBook:  state.lastBook,
+      extension: state.extension,
+    });
+
+    const resp = await fetch(`${PROXY_URL.replace("/libro", "/recomendar")}?${params}`);
+    if (!resp.ok) throw new Error("Error del servidor");
+    const result = await resp.json();
+
+    if (!result.libros || result.libros.length === 0) {
+      showStep("nostock");
+      return;
+    }
+
+    setLoadingMsg("Verificando disponibilidad en nuestra tienda...");
+    renderResults(result.intro, result.libros);
+
+  } catch (e) {
+    showStep("results");
+    document.getElementById("bookList").innerHTML = `<div class="error-msg">Error al obtener recomendaciones. Por favor intenta de nuevo.</div>`;
+  }
+}
+
+function setLoadingMsg(msg) {
+  const el = document.getElementById("loadingMsg");
+  if (el) el.textContent = msg;
+}
+
+// ─── HELPERS ─────────────────────────────────────────────────────────────────
+function safeText(el, text) { el.textContent = String(text || ""); }
+
+function safeImgUrl(url) {
+  // Solo permitir URLs https:// que apunten a dominios conocidos
+  try {
+    const u = new URL(url);
+    if (u.protocol !== "https:") return null;
+    const allowed = ["cdn.jumpseller.com", "jumpseller.com", "decealibros.cl"];
+    if (!allowed.some(d => u.hostname === d || u.hostname.endsWith("." + d))) return null;
+    return u.href;
+  } catch { return null; }
+}
+
+function safeUrl(url) {
+  try {
+    const u = new URL(url);
+    if (u.protocol !== "https:") return "#";
+    return u.href;
+  } catch { return "#"; }
+}
+
+// ─── RENDERIZADO ─────────────────────────────────────────────────────────────
+function renderResults(intro, libros) {
+  document.getElementById("resultsIntro").textContent = intro || "Aquí están tus recomendaciones:";
+
+  const list = document.getElementById("bookList");
+  list.innerHTML = "";
+
+  libros.forEach((libro, i) => {
+    const js     = libro.jumpseller || {};
+    const titulo = String(js.titulo || libro.titulo || "");
+    const autor  = String(js.autor  || libro.autor  || "");
+    const precio = js.precio ? `$${Math.round(js.precio).toLocaleString("es-CL")}` : "";
+    const imagen = safeImgUrl(js.imagen || "");
+    const url    = safeUrl(js.url || `https://decealibros.cl/search?q=${encodeURIComponent(libro.titulo)}`);
+    const desc   = String(js.descripcion || libro.por_que || "");
+
+    // Construir DOM sin innerHTML para evitar XSS
+    const card = document.createElement("div");
+    card.className = "book-card";
+
+    // Cover
+    const coverDiv = document.createElement("div");
+    coverDiv.className = "book-cover";
+    if (imagen) {
+      const img = document.createElement("img");
+      img.src = imagen;
+      img.alt = `Portada ${titulo}`;
+      img.loading = "lazy";
+      coverDiv.appendChild(img);
+    } else {
+      coverDiv.innerHTML = `<div class="no-cover"><svg viewBox="0 0 24 24" fill="none" stroke="#2d5016" stroke-width="1.5"><rect x="3" y="2" width="13" height="20" rx="1"/><path d="M7 6h6M7 10h6M7 14h4"/><path d="M16 6l4 2-4 2V6z"/></svg></div>`;
+    }
+
+    // Info
+    const infoDiv = document.createElement("div");
+    infoDiv.className = "book-info";
+
+    const num = document.createElement("div");
+    num.className = "num";
+    safeText(num, `Opción ${i + 1}`);
+
+    const h3 = document.createElement("h3");
+    safeText(h3, titulo);
+
+    const authorEl = document.createElement("div");
+    authorEl.className = "author";
+    safeText(authorEl, autor);
+
+    const whyEl = document.createElement("div");
+    whyEl.className = "why";
+    safeText(whyEl, desc);
+
+    const footer = document.createElement("div");
+    footer.className = "book-footer";
+
+    if (precio) {
+      const precioEl = document.createElement("span");
+      precioEl.className = "precio";
+      safeText(precioEl, precio);
+      footer.appendChild(precioEl);
+    }
+
+    const link = document.createElement("a");
+    link.className = "btn-ver";
+    link.href = url;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    link.textContent = "Ver en tienda →";
+    footer.appendChild(link);
+
+    infoDiv.append(num, h3, authorEl, whyEl, footer);
+    card.append(coverDiv, infoDiv);
+    list.appendChild(card);
+  });
+
+  showStep("results");
+}
+
+function restart() {
+  state.genero = null; state.mood = null; state.lastBook = ""; state.extension = null;
+  document.querySelectorAll(".tag").forEach(t => t.classList.remove("selected"));
+  document.getElementById("lastBook").value = "";
+  document.querySelectorAll(".btn[id^='btn']").forEach(b => b.disabled = true);
+  document.getElementById("bookList").innerHTML = "";
+  showStep(1);
+}
+
+updateProgress(1);
+</script>
+</body>
+</html>
