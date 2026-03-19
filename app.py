@@ -17,7 +17,7 @@ ALLOWED_ORIGINS = [
     "https://xristhian.github.io",
 ]
 
-# ─── Rate limiting ────────────────────────────────────────────────────────────
+# Rate limiting
 _rate_buckets: dict = defaultdict(list)
 RATE_LIMIT  = 10
 RATE_WINDOW = 60
@@ -30,7 +30,6 @@ def _check_rate_limit(ip: str) -> bool:
     _rate_buckets[ip].append(now)
     return True
 
-# ─── CORS ─────────────────────────────────────────────────────────────────────
 def add_cors(response, origin: str):
     if origin in ALLOWED_ORIGINS:
         response.headers["Access-Control-Allow-Origin"] = origin
@@ -47,7 +46,6 @@ def get_origin():
 def get_ip():
     return request.headers.get("X-Forwarded-For", request.remote_addr).split(",")[0].strip()
 
-# ─── Validación ISBN-13 ───────────────────────────────────────────────────────
 ISBN13_RE = re.compile(r"^\d{13}$")
 
 def valid_isbn13(isbn: str) -> bool:
@@ -56,74 +54,59 @@ def valid_isbn13(isbn: str) -> bool:
     total = sum(int(d) * (1 if i % 2 == 0 else 3) for i, d in enumerate(isbn[:12]))
     return (10 - (total % 10)) % 10 == int(isbn[12])
 
-# ─── Scraper HTML ─────────────────────────────────────────────────────────────
 class ProductParser(HTMLParser):
-    """Extrae datos del primer product-block encontrado en el HTML de búsqueda."""
-
     def __init__(self):
         super().__init__()
-        self.result       = None   # dict con datos del producto
-        self._in_article  = False
+        self.result         = None
+        self._in_article    = False
         self._article_depth = 0
-        self._depth       = 0
-        self._in_title    = False
-        self._in_price    = False
-        self._in_sku      = False
-        self._buf         = ""
+        self._depth         = 0
+        self._in_title      = False
+        self._in_price      = False
+        self._in_sku        = False
+        self._buf           = ""
 
     def handle_starttag(self, tag, attrs):
         self._depth += 1
         attrs = dict(attrs)
         classes = attrs.get("class", "")
 
-        # Detectar inicio del article del producto
         if tag == "article" and "product-block" in classes and not self._in_article:
-            self._in_article   = True
+            self._in_article    = True
             self._article_depth = self._depth
-            self.result        = {
-                "titulo": "", "precio": None, "imagen": None,
-                "url": None, "stock": False
-            }
+            self.result         = {"titulo": "", "precio": None, "imagen": None, "url": None, "stock": False}
 
         if not self._in_article or self.result is None:
             return
 
-        # URL del producto (anchor principal)
         if tag == "a" and "product-block__anchor" in classes and not self.result["url"]:
             href = attrs.get("href", "")
             if href:
                 self.result["url"] = STORE_URL + href if href.startswith("/") else href
 
-        # Imagen de mayor resolución (source con media 1200px)
         if tag == "source" and "1200px" in attrs.get("media", ""):
             srcset = attrs.get("srcset", "")
             if srcset and not self.result["imagen"]:
                 self.result["imagen"] = _safe_img_url(srcset.split(",")[0].strip().split(" ")[0])
 
-        # Imagen fallback
         if tag == "img" and "product-block__image" in classes and not self.result["imagen"]:
             self.result["imagen"] = _safe_img_url(attrs.get("src", ""))
 
-        # Título
         if tag == "a" and "product-block__name" in classes:
             self._in_title = True
             self._buf = ""
 
-        # Precio
         if tag == "div" and "product-block__price" in classes:
             self._in_price = True
             self._buf = ""
 
-        # SKU (para confirmar ISBN coincide)
         if tag == "span" and "product-block__sku" in classes:
             self._in_sku = True
             self._buf = ""
 
-        # Stock: input qty con max > 0
         if tag == "input" and attrs.get("name") == "qty":
             try:
-                max_val = int(attrs.get("max", "0") or "0")
-                if max_val > 0:
+                if int(attrs.get("max", "0") or "0") > 0:
                     self.result["stock"] = True
             except ValueError:
                 pass
@@ -135,9 +118,7 @@ class ProductParser(HTMLParser):
             self._buf = ""
 
         if self._in_price and tag == "div":
-            raw = self._buf.strip()
-            # "$26.990" → 26990.0
-            num = re.sub(r"[^\d]", "", raw)
+            num = re.sub(r"[^\d]", "", self._buf.strip())
             if num:
                 self.result["precio"] = float(num)
             self._in_price = False
@@ -147,7 +128,6 @@ class ProductParser(HTMLParser):
             self._in_sku = False
             self._buf = ""
 
-        # Salir del article al cerrar el tag al mismo nivel
         if self._in_article and tag == "article" and self._depth == self._article_depth:
             self._in_article = False
 
@@ -159,12 +139,8 @@ class ProductParser(HTMLParser):
 
 
 def scrape_isbn(isbn: str) -> dict:
-    """Busca el ISBN en la web de la tienda y retorna datos del producto."""
     url = f"{STORE_URL}/search?q={isbn}"
-    headers = {
-        "User-Agent": "Mozilla/5.0 (compatible; DecealibrosBot/1.0)",
-        "Accept-Language": "es-CL,es;q=0.9",
-    }
+    headers = {"User-Agent": "Mozilla/5.0 (compatible; DecealibrosBot/1.0)", "Accept-Language": "es-CL,es;q=0.9"}
     try:
         r = requests.get(url, headers=headers, timeout=10)
         r.raise_for_status()
@@ -173,7 +149,6 @@ def scrape_isbn(isbn: str) -> dict:
     except Exception:
         raise RuntimeError("fetch_error")
 
-    # Verificar si hay resultados (texto "No hay resultados" en el HTML)
     if "No hay resultados disponibles" in r.text:
         return {"encontrado": False}
 
@@ -184,46 +159,32 @@ def scrape_isbn(isbn: str) -> dict:
         return {"encontrado": False}
 
     p = parser.result
-    return {
-        "encontrado":  True,
-        "stock":       p["stock"],
-        "titulo":      p["titulo"],
-        "precio":      p["precio"],
-        "imagen":      p["imagen"],
-        "url":         p["url"] or url,
-        "descripcion": "",
-    }
+    return {"encontrado": True, "stock": p["stock"], "titulo": p["titulo"],
+            "precio": p["precio"], "imagen": p["imagen"], "url": p["url"] or url, "descripcion": ""}
 
 
-# ─── /libro?isbn=… ───────────────────────────────────────────────────────────
 @app.route("/libro", methods=["GET", "OPTIONS"])
 def buscar_libro():
     origin = get_origin()
     if request.method == "OPTIONS":
         return cors_options(origin)
-
     if not _check_rate_limit(get_ip()):
         return add_cors(jsonify({"error": "Demasiadas solicitudes"}), origin), 429
-
     isbn = request.args.get("isbn", "").strip()
     if not isbn or not valid_isbn13(isbn):
         return add_cors(jsonify({"error": "ISBN inválido"}), origin), 400
-
     try:
         datos = scrape_isbn(isbn)
     except RuntimeError as e:
         return add_cors(jsonify({"error": str(e)}), origin), 502
-
     return add_cors(jsonify(datos), origin)
 
 
-# ─── /recomendar?genero=…&mood=…&lastBook=…&extension=… ──────────────────────
 @app.route("/recomendar", methods=["GET", "OPTIONS"])
 def recomendar():
     origin = get_origin()
     if request.method == "OPTIONS":
         return cors_options(origin)
-
     if not _check_rate_limit(get_ip()):
         return add_cors(jsonify({"error": "Demasiadas solicitudes"}), origin), 429
 
@@ -250,6 +211,8 @@ def recomendar():
         '"por_que":"2-3 frases explicando por qué es ideal para este usuario"}]}'
     )
 
+    # Llamada a Claude con logging detallado
+    cr = None
     try:
         cr = requests.post(
             "https://api.anthropic.com/v1/messages",
@@ -259,16 +222,24 @@ def recomendar():
                 "Content-Type":      "application/json",
             },
             json={
-                "model":    "claude-3-5-sonnet-20241022",
+                "model":      "claude-3-5-sonnet-20241022",
                 "max_tokens": 1000,
-                "messages": [{"role": "user", "content": prompt}],
+                "messages":   [{"role": "user", "content": prompt}],
             },
             timeout=30,
         )
+        print(f"Claude status: {cr.status_code}", flush=True)
         cr.raise_for_status()
         result = _parse_json(cr.json()["content"][0]["text"])
-    except Exception:
-        return add_cors(jsonify({"error": "Error al generar recomendaciones"}), origin), 502
+    except Exception as e:
+        err_detail = ""
+        if cr is not None:
+            try:
+                err_detail = cr.text[:300]
+            except Exception:
+                pass
+        print(f"ERROR Claude: {type(e).__name__}: {e} | response: {err_detail}", flush=True)
+        return add_cors(jsonify({"error": f"{type(e).__name__}: {str(e)[:200]} | {err_detail}"}), origin), 502
 
     libros_con_stock = []
     for libro in result.get("libros", []):
@@ -298,7 +269,6 @@ def recomendar():
     }), origin)
 
 
-# ─── Helpers ──────────────────────────────────────────────────────────────────
 def _safe_img_url(url):
     if not url:
         return None
