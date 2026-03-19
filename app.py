@@ -14,6 +14,7 @@ STORE_URL         = "https://decealibros.cl"
 ALLOWED_ORIGINS = [
     "https://decealibros.cl",
     "https://www.decealibros.cl",
+    "https://xristhian.github.io",
 ]
 
 # ─── Rate limiting ────────────────────────────────────────────────────────────
