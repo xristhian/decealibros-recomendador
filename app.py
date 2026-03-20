@@ -1,14 +1,17 @@
 import re
 import os
 import time
+import random
 import requests
 from collections import defaultdict
 from flask import Flask, jsonify, request
-from html.parser import HTMLParser
 
 app = Flask(__name__)
 
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
+JUMPSELLER_LOGIN  = os.environ.get("JUMPSELLER_LOGIN")
+JUMPSELLER_TOKEN  = os.environ.get("JUMPSELLER_TOKEN")
+JUMPSELLER_BASE   = "https://api.jumpseller.com/v1"
 STORE_URL         = "https://decealibros.cl"
 
 ALLOWED_ORIGINS = [
@@ -17,7 +20,22 @@ ALLOWED_ORIGINS = [
     "https://xristhian.github.io",
 ]
 
-# Rate limiting
+# ─── Mapa género → categoría Jumpseller ──────────────────────────────────────
+GENERO_CATEGORIA = {
+    "Literatura chilena":          "novela-chilena",
+    "Thriller y suspenso":         "novela/novela-negra",
+    "Literatura juvenil":          "libros/infantil-y-juvenil/juvenil",
+    "Ciencia ficción":             None,
+    "Romance":                     "novela-romantica",
+    "Historia y biografías":       "biografias-1",
+    "Autoayuda y desarrollo personal": "libros/desarrollo-personal/autoayuda",
+    "Novela literaria":            "novela",
+    "Terror y horror":             "novela/novela-negra",
+    "Fantasía":                    None,
+    "No ficción":                  None,
+}
+
+# ─── Rate limiting ────────────────────────────────────────────────────────────
 _rate_buckets: dict = defaultdict(list)
 RATE_LIMIT  = 10
 RATE_WINDOW = 60
@@ -30,6 +48,7 @@ def _check_rate_limit(ip: str) -> bool:
     _rate_buckets[ip].append(now)
     return True
 
+# ─── CORS ─────────────────────────────────────────────────────────────────────
 def add_cors(response, origin: str):
     if origin in ALLOWED_ORIGINS:
         response.headers["Access-Control-Allow-Origin"] = origin
@@ -46,114 +65,89 @@ def get_origin():
 def get_ip():
     return request.headers.get("X-Forwarded-For", request.remote_addr).split(",")[0].strip()
 
+# ─── Obtener productos con stock desde Jumpseller ─────────────────────────────
+def obtener_productos(genero: str, limit: int = 30) -> list:
+    """Trae productos con stock desde Jumpseller según el género."""
+    categoria = GENERO_CATEGORIA.get(genero)
 
-class ProductParser(HTMLParser):
-    def __init__(self):
-        super().__init__()
-        self.result         = None
-        self._in_article    = False
-        self._article_depth = 0
-        self._depth         = 0
-        self._in_title      = False
-        self._in_price      = False
-        self._buf           = ""
+    if categoria:
+        # Buscar por categoría
+        params = {
+            "login":     JUMPSELLER_LOGIN,
+            "authtoken": JUMPSELLER_TOKEN,
+            "category":  categoria,
+            "status":    "available",
+            "limit":     limit,
+            "page":      1,
+        }
+    else:
+        # Buscar por query de texto para géneros sin categoría directa
+        query_map = {
+            "Ciencia ficción":  "ciencia ficcion",
+            "Fantasía":         "fantasia",
+            "No ficción":       "no ficcion",
+        }
+        params = {
+            "login":     JUMPSELLER_LOGIN,
+            "authtoken": JUMPSELLER_TOKEN,
+            "q":         query_map.get(genero, genero),
+            "status":    "available",
+            "limit":     limit,
+            "page":      1,
+        }
 
-    def handle_starttag(self, tag, attrs):
-        self._depth += 1
-        attrs = dict(attrs)
-        classes = attrs.get("class", "")
-
-        if tag == "article" and "product-block" in classes and not self._in_article:
-            self._in_article    = True
-            self._article_depth = self._depth
-            self.result         = {"titulo": "", "precio": None, "imagen": None, "url": None, "stock": False}
-
-        if not self._in_article or self.result is None:
-            return
-
-        if tag == "a" and "product-block__anchor" in classes and not self.result["url"]:
-            href = attrs.get("href", "")
-            if href:
-                self.result["url"] = STORE_URL + href if href.startswith("/") else href
-
-        if tag == "source" and "1200px" in attrs.get("media", ""):
-            srcset = attrs.get("srcset", "")
-            if srcset and not self.result["imagen"]:
-                self.result["imagen"] = _safe_img_url(srcset.split(",")[0].strip().split(" ")[0])
-
-        if tag == "img" and "product-block__image" in classes and not self.result["imagen"]:
-            self.result["imagen"] = _safe_img_url(attrs.get("src", ""))
-
-        if tag == "a" and "product-block__name" in classes:
-            self._in_title = True
-            self._buf = ""
-
-        if tag == "div" and "product-block__price" in classes:
-            self._in_price = True
-            self._buf = ""
-
-        if tag == "input" and attrs.get("name") == "qty":
-            try:
-                if int(attrs.get("max", "0") or "0") > 0:
-                    self.result["stock"] = True
-            except ValueError:
-                pass
-
-    def handle_endtag(self, tag):
-        if self._in_title and tag == "a":
-            self.result["titulo"] = self._buf.strip()
-            self._in_title = False
-            self._buf = ""
-
-        if self._in_price and tag == "div":
-            num = re.sub(r"[^\d]", "", self._buf.strip())
-            if num:
-                self.result["precio"] = float(num)
-            self._in_price = False
-            self._buf = ""
-
-        if self._in_article and tag == "article" and self._depth == self._article_depth:
-            self._in_article = False
-
-        self._depth -= 1
-
-    def handle_data(self, data):
-        if self._in_title or self._in_price:
-            self._buf += data
-
-
-def scrape_titulo(titulo: str) -> dict:
-    """Busca un libro por título en la tienda y retorna datos del primer resultado."""
-    url = f"{STORE_URL}/search?q={requests.utils.quote(titulo)}"
-    headers = {"User-Agent": "Mozilla/5.0 (compatible; DecealibrosBot/1.0)", "Accept-Language": "es-CL,es;q=0.9"}
     try:
-        r = requests.get(url, headers=headers, timeout=10)
+        r = requests.get(
+            f"{JUMPSELLER_BASE}/products.json",
+            params=params,
+            timeout=10,
+        )
         r.raise_for_status()
-    except requests.exceptions.Timeout:
-        raise RuntimeError("timeout")
-    except Exception:
-        raise RuntimeError("fetch_error")
+        productos = r.json()
+    except Exception as e:
+        print(f"ERROR Jumpseller: {e}", flush=True)
+        return []
 
-    if "No hay resultados disponibles" in r.text:
-        return {"encontrado": False}
+    resultado = []
+    for item in productos:
+        p = item.get("product", item)
 
-    parser = ProductParser()
-    parser.feed(r.text)
+        # Verificar stock
+        variantes = p.get("variants", [])
+        stock = sum(v.get("stock", 0) or 0 for v in variantes) or (p.get("stock", 0) or 0)
+        if stock <= 0:
+            continue
 
-    if not parser.result or not parser.result.get("titulo"):
-        return {"encontrado": False}
+        # Precio
+        precios = [float(v["price"]) for v in variantes if (v.get("stock") or 0) > 0 and v.get("price")]
+        precio = min(precios) if precios else (float(p["price"]) if p.get("price") else None)
 
-    p = parser.result
-    return {
-        "encontrado": True,
-        "stock":      p["stock"],
-        "titulo":     p["titulo"],
-        "precio":     p["precio"],
-        "imagen":     p["imagen"],
-        "url":        p["url"] or url,
-    }
+        # Imagen
+        imagenes = p.get("images", [])
+        imagen = _safe_img_url(imagenes[0].get("url") if imagenes else None)
+
+        # Autor desde additional_fields
+        autor = ""
+        for mf in p.get("additional_fields", []):
+            if "autor" in (mf.get("label") or "").lower():
+                autor = str(mf.get("value", ""))
+                break
+
+        resultado.append({
+            "titulo":  p.get("name", ""),
+            "autor":   autor,
+            "precio":  precio,
+            "imagen":  imagen,
+            "url":     f"{STORE_URL}/store/productos/{p.get('permalink', '')}",
+            "stock":   stock,
+        })
+
+    # Mezclar para variedad
+    random.shuffle(resultado)
+    return resultado
 
 
+# ─── /recomendar ──────────────────────────────────────────────────────────────
 @app.route("/recomendar", methods=["GET", "OPTIONS"])
 def recomendar():
     origin = get_origin()
@@ -170,6 +164,19 @@ def recomendar():
     if not all([genero, mood, last_book, extension]):
         return add_cors(jsonify({"error": "Faltan parámetros"}), origin), 400
 
+    # 1. Obtener catálogo real desde Jumpseller
+    productos = obtener_productos(genero, limit=40)
+    if not productos:
+        return add_cors(jsonify({"intro": "", "libros": []}), origin)
+
+    # Preparar lista de títulos para Claude (máximo 25)
+    muestra = productos[:25]
+    lista_titulos = "\n".join(
+        f"- {p['titulo']}" + (f" ({p['autor']})" if p['autor'] else "")
+        for p in muestra
+    )
+
+    # 2. Pedirle a Claude que elija 3 de esa lista
     prompt = (
         'Eres un experto recomendador de libros para la librería chilena "De Cea Libros".\n\n'
         "Un usuario ha respondido:\n"
@@ -177,12 +184,13 @@ def recomendar():
         f"- Lo que busca en la lectura: {mood}\n"
         f'- Último libro que le gustó: "{last_book}"\n'
         f"- Extensión preferida: {extension}\n\n"
-        "Recomienda exactamente 5 libros comerciales muy conocidos y populares en Chile.\n"
-        "Prioriza libros de autores chilenos o latinoamericanos, o bestsellers internacionales muy vendidos.\n\n"
+        "Estos son los libros disponibles actualmente en nuestra tienda:\n"
+        f"{lista_titulos}\n\n"
+        "Elige exactamente 3 libros de esa lista que mejor se adapten a las preferencias del usuario.\n"
+        "IMPORTANTE: Solo puedes elegir títulos que aparezcan EXACTAMENTE en la lista de arriba.\n\n"
         "Responde ÚNICAMENTE con JSON válido, sin texto adicional:\n"
         '{"intro":"Frase breve y cálida (máximo 15 palabras)",'
-        '"libros":[{"titulo":"Título exacto del libro","autor":"Nombre Apellido",'
-        '"por_que":"2-3 frases explicando por qué es ideal para este usuario"}]}'
+        '"seleccion":["Título exacto 1","Título exacto 2","Título exacto 3"]}'
     )
 
     cr = None
@@ -196,7 +204,7 @@ def recomendar():
             },
             json={
                 "model":      "claude-haiku-4-5-20251001",
-                "max_tokens": 1000,
+                "max_tokens": 500,
                 "messages":   [{"role": "user", "content": prompt}],
             },
             timeout=30,
@@ -204,47 +212,54 @@ def recomendar():
         cr.raise_for_status()
         result = _parse_json(cr.json()["content"][0]["text"])
     except Exception as e:
-        err_detail = ""
-        if cr is not None:
-            try:
-                err_detail = cr.text[:300]
-            except Exception:
-                pass
-        print(f"ERROR Claude: {type(e).__name__}: {e} | {err_detail}", flush=True)
-        return add_cors(jsonify({"error": f"{type(e).__name__}: {str(e)[:200]}"}), origin), 502
+        err_detail = cr.text[:200] if cr is not None else ""
+        print(f"ERROR Claude: {e} | {err_detail}", flush=True)
+        return add_cors(jsonify({"error": str(e)[:100]}), origin), 502
 
-    libros_con_stock = []
-    for libro in result.get("libros", []):
-        if len(libros_con_stock) >= 3:
+    # 3. Cruzar selección de Claude con datos reales de Jumpseller
+    seleccion = result.get("seleccion", [])
+    productos_map = {p["titulo"].lower(): p for p in muestra}
+
+    libros_finales = []
+    for titulo_sel in seleccion:
+        match = productos_map.get(titulo_sel.lower())
+        if not match:
+            # Búsqueda aproximada
+            for key, prod in productos_map.items():
+                if titulo_sel.lower() in key or key in titulo_sel.lower():
+                    match = prod
+                    break
+        if match:
+            libros_finales.append({
+                "titulo":      match["titulo"],
+                "autor":       match["autor"],
+                "precio":      match["precio"],
+                "imagen":      match["imagen"],
+                "url":         match["url"],
+                "descripcion": "",
+            })
+        if len(libros_finales) >= 3:
             break
-        titulo = str(libro.get("titulo", "")).strip()
-        if not titulo:
-            continue
-        try:
-            datos = scrape_titulo(titulo)
-        except RuntimeError:
-            continue
-        if not datos.get("encontrado") or not datos.get("stock"):
-            continue
-        libros_con_stock.append({
-            "titulo":      datos.get("titulo") or titulo,
-            "autor":       libro.get("autor", ""),
-            "precio":      datos.get("precio"),
-            "imagen":      datos.get("imagen"),
-            "url":         datos.get("url"),
-            "descripcion": libro.get("por_que", ""),
-        })
+
+    # Si Claude no matcheó bien, tomar los primeros 3 con stock
+    if not libros_finales:
+        libros_finales = [
+            {"titulo": p["titulo"], "autor": p["autor"], "precio": p["precio"],
+             "imagen": p["imagen"], "url": p["url"], "descripcion": ""}
+            for p in muestra[:3]
+        ]
 
     return add_cors(jsonify({
         "intro":  result.get("intro", "Tus próximas lecturas:"),
-        "libros": libros_con_stock,
+        "libros": libros_finales,
     }), origin)
 
 
+# ─── Helpers ──────────────────────────────────────────────────────────────────
 def _safe_img_url(url):
     if not url:
         return None
-    allowed = {"cdnx.jumpseller.com", "cdn.jumpseller.com", "images.jumpseller.com"}
+    allowed = {"cdn.jumpseller.com", "cdnx.jumpseller.com", "images.jumpseller.com"}
     try:
         from urllib.parse import urlparse
         p = urlparse(url)
