@@ -187,7 +187,11 @@ def recomendar():
         "Estos son los libros disponibles actualmente en nuestra tienda:\n"
         f"{lista_titulos}\n\n"
         "Elige exactamente 3 libros de esa lista que mejor se adapten a las preferencias del usuario.\n"
-        "IMPORTANTE: Solo puedes elegir títulos que aparezcan EXACTAMENTE en la lista de arriba.\n\n"
+        "REGLAS IMPORTANTES:\n"
+        "- Solo puedes elegir títulos que aparezcan EXACTAMENTE en la lista de arriba.\n"
+        "- Prioriza autores chilenos y latinoamericanos por sobre autores españoles.\n"
+        "- Elige libros que realmente correspondan al género solicitado.\n"
+        "- Si hay pocos libros en la lista, elige los más adecuados disponibles.\n\n"
         "Responde ÚNICAMENTE con JSON válido, sin texto adicional:\n"
         '{"intro":"Frase breve y cálida (máximo 15 palabras)",'
         '"seleccion":["Título exacto 1","Título exacto 2","Título exacto 3"]}'
