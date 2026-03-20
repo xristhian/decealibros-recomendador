@@ -46,13 +46,6 @@ def get_origin():
 def get_ip():
     return request.headers.get("X-Forwarded-For", request.remote_addr).split(",")[0].strip()
 
-ISBN13_RE = re.compile(r"^\d{13}$")
-
-def valid_isbn13(isbn: str) -> bool:
-    if not ISBN13_RE.match(isbn):
-        return False
-    total = sum(int(d) * (1 if i % 2 == 0 else 3) for i, d in enumerate(isbn[:12]))
-    return (10 - (total % 10)) % 10 == int(isbn[12])
 
 class ProductParser(HTMLParser):
     def __init__(self):
@@ -63,7 +56,6 @@ class ProductParser(HTMLParser):
         self._depth         = 0
         self._in_title      = False
         self._in_price      = False
-        self._in_sku        = False
         self._buf           = ""
 
     def handle_starttag(self, tag, attrs):
@@ -100,10 +92,6 @@ class ProductParser(HTMLParser):
             self._in_price = True
             self._buf = ""
 
-        if tag == "span" and "product-block__sku" in classes:
-            self._in_sku = True
-            self._buf = ""
-
         if tag == "input" and attrs.get("name") == "qty":
             try:
                 if int(attrs.get("max", "0") or "0") > 0:
@@ -124,22 +112,19 @@ class ProductParser(HTMLParser):
             self._in_price = False
             self._buf = ""
 
-        if self._in_sku and tag == "span":
-            self._in_sku = False
-            self._buf = ""
-
         if self._in_article and tag == "article" and self._depth == self._article_depth:
             self._in_article = False
 
         self._depth -= 1
 
     def handle_data(self, data):
-        if self._in_title or self._in_price or self._in_sku:
+        if self._in_title or self._in_price:
             self._buf += data
 
 
-def scrape_isbn(isbn: str) -> dict:
-    url = f"{STORE_URL}/search?q={isbn}"
+def scrape_titulo(titulo: str) -> dict:
+    """Busca un libro por título en la tienda y retorna datos del primer resultado."""
+    url = f"{STORE_URL}/search?q={requests.utils.quote(titulo)}"
     headers = {"User-Agent": "Mozilla/5.0 (compatible; DecealibrosBot/1.0)", "Accept-Language": "es-CL,es;q=0.9"}
     try:
         r = requests.get(url, headers=headers, timeout=10)
@@ -159,25 +144,14 @@ def scrape_isbn(isbn: str) -> dict:
         return {"encontrado": False}
 
     p = parser.result
-    return {"encontrado": True, "stock": p["stock"], "titulo": p["titulo"],
-            "precio": p["precio"], "imagen": p["imagen"], "url": p["url"] or url, "descripcion": ""}
-
-
-@app.route("/libro", methods=["GET", "OPTIONS"])
-def buscar_libro():
-    origin = get_origin()
-    if request.method == "OPTIONS":
-        return cors_options(origin)
-    if not _check_rate_limit(get_ip()):
-        return add_cors(jsonify({"error": "Demasiadas solicitudes"}), origin), 429
-    isbn = request.args.get("isbn", "").strip()
-    if not isbn or not valid_isbn13(isbn):
-        return add_cors(jsonify({"error": "ISBN inválido"}), origin), 400
-    try:
-        datos = scrape_isbn(isbn)
-    except RuntimeError as e:
-        return add_cors(jsonify({"error": str(e)}), origin), 502
-    return add_cors(jsonify(datos), origin)
+    return {
+        "encontrado": True,
+        "stock":      p["stock"],
+        "titulo":     p["titulo"],
+        "precio":     p["precio"],
+        "imagen":     p["imagen"],
+        "url":        p["url"] or url,
+    }
 
 
 @app.route("/recomendar", methods=["GET", "OPTIONS"])
@@ -203,15 +177,14 @@ def recomendar():
         f"- Lo que busca en la lectura: {mood}\n"
         f'- Último libro que le gustó: "{last_book}"\n'
         f"- Extensión preferida: {extension}\n\n"
-        "Recomienda exactamente 5 libros comerciales conocidos, disponibles habitualmente en librerías chilenas.\n"
-        "Para cada libro proporciona el ISBN-13 (13 dígitos exactos, sin guiones ni espacios).\n\n"
+        "Recomienda exactamente 5 libros comerciales muy conocidos y populares en Chile.\n"
+        "Prioriza libros de autores chilenos o latinoamericanos, o bestsellers internacionales muy vendidos.\n\n"
         "Responde ÚNICAMENTE con JSON válido, sin texto adicional:\n"
         '{"intro":"Frase breve y cálida (máximo 15 palabras)",'
-        '"libros":[{"titulo":"Título exacto","autor":"Nombre Apellido","isbn":"9789999999999",'
+        '"libros":[{"titulo":"Título exacto del libro","autor":"Nombre Apellido",'
         '"por_que":"2-3 frases explicando por qué es ideal para este usuario"}]}'
     )
 
-    # Llamada a Claude con logging detallado
     cr = None
     try:
         cr = requests.post(
@@ -228,7 +201,6 @@ def recomendar():
             },
             timeout=30,
         )
-        print(f"Claude status: {cr.status_code}", flush=True)
         cr.raise_for_status()
         result = _parse_json(cr.json()["content"][0]["text"])
     except Exception as e:
@@ -238,24 +210,24 @@ def recomendar():
                 err_detail = cr.text[:300]
             except Exception:
                 pass
-        print(f"ERROR Claude: {type(e).__name__}: {e} | response: {err_detail}", flush=True)
-        return add_cors(jsonify({"error": f"{type(e).__name__}: {str(e)[:200]} | {err_detail}"}), origin), 502
+        print(f"ERROR Claude: {type(e).__name__}: {e} | {err_detail}", flush=True)
+        return add_cors(jsonify({"error": f"{type(e).__name__}: {str(e)[:200]}"}), origin), 502
 
     libros_con_stock = []
     for libro in result.get("libros", []):
         if len(libros_con_stock) >= 3:
             break
-        isbn = str(libro.get("isbn", "")).replace("-", "").strip()
-        if not valid_isbn13(isbn):
+        titulo = str(libro.get("titulo", "")).strip()
+        if not titulo:
             continue
         try:
-            datos = scrape_isbn(isbn)
+            datos = scrape_titulo(titulo)
         except RuntimeError:
             continue
         if not datos.get("encontrado") or not datos.get("stock"):
             continue
         libros_con_stock.append({
-            "titulo":      datos.get("titulo") or libro.get("titulo", ""),
+            "titulo":      datos.get("titulo") or titulo,
             "autor":       libro.get("autor", ""),
             "precio":      datos.get("precio"),
             "imagen":      datos.get("imagen"),
