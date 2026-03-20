@@ -298,7 +298,7 @@ function safeImgUrl(url) {
   try {
     const u = new URL(url);
     if (u.protocol !== "https:") return null;
-    const allowed = ["cdn.jumpseller.com", "jumpseller.com", "decealibros.cl"];
+    const allowed = ["cdn.jumpseller.com", "cdnx.jumpseller.com", "images.jumpseller.com", "jumpseller.com", "decealibros.cl"];
     if (!allowed.some(d => u.hostname === d || u.hostname.endsWith("." + d))) return null;
     return u.href;
   } catch { return null; }
